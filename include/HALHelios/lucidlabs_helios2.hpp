@@ -45,7 +45,7 @@ class LucidlabsHelios2 : public rclcpp::Node, public Arena::IImageCallback {
 
    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pc_publisher_;
 
-   enum class cam_model {HELIOS_2, HELIOS_2_PLUS};
+   enum class cam_model {HELIOS_2, HELIOS_2_PLUS, HELIOS_2_WIDE};
    cam_model m;
    Arena::IImageCallback* pCallbackHandler;
    

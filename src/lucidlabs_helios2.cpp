@@ -82,12 +82,20 @@ LucidlabsHelios2::LucidlabsHelios2(const rclcpp::NodeOptions & options) : Node("
             EnumEntry: 'Exp62_5Us'
             EnumEntry: 'Exp250Us'
             EnumEntry: 'Exp1000Us'
+            EnumEntry: 'Exp350Us',
+            EnumEntry: 'Exp88Us',
+            EnumEntry: 'Exp13Us',
         */
         static std::vector<std::string> exposures = {
             "Exp62_5Us",
             "Exp250Us",
-            "Exp1000Us"
+            "Exp1000Us",
+            "Exp350Us",
+            "Exp88Us",
+            "Exp13Us"
         };
+
+
         GenApi::CEnumerationPtr pExposureTime = pNodeMap->GetNode("ExposureTimeSelector");
         GenApi::CEnumEntryPtr pExp = pExposureTime->GetEntryByName(exposures[exposure].c_str());
         pExposureTime->SetIntValue(pExp->GetValue());
@@ -159,7 +167,7 @@ LucidlabsHelios2::LucidlabsHelios2(const rclcpp::NodeOptions & options) : Node("
             "Off"
         };
 
-        if (m == cam_model::HELIOS_2 && hdr_mode != 3) {
+        if ((m == cam_model::HELIOS_2 || m == cam_model::HELIOS_2_WIDE) && hdr_mode != 3) {
             RCLCPP_ERROR(get_logger(), "Helios 2 does not support Scan3dHDRMode");
             std::abort();
         } else if (m == cam_model::HELIOS_2_PLUS) {
@@ -239,6 +247,12 @@ Arena::IDevice* LucidlabsHelios2::findDevice() {
                     break;
             } else if (deviceInfos[id].ModelName() == "HTP003S-001"){
                 m = cam_model::HELIOS_2_PLUS;
+                found = true;
+                found_id = id;
+                break;
+            }
+            else if (deviceInfos[id].ModelName() == "HTR003S-001"){
+                m = cam_model::HELIOS_2_WIDE;
                 found = true;
                 found_id = id;
                 break;

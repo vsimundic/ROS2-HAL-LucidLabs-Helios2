@@ -13,24 +13,20 @@ hal_lucidlabs_helios2:
       threshold: 20
     # Options dumped with arv-tool
       #Enumeration: 'Scan3dHDRMode'
-          #EnumEntry: (0) 'LowNoiseHDRX8'
-          #EnumEntry: (1) 'LowNoiseHDRX4'
-          #EnumEntry: (2) 'StandardHDR'
           #EnumEntry: (3) 'Off'
     hdr_mode: 3      
-    accumulate_frames: 2
+    accumulate_frames: 1
     frame_id: "camera"
+    
     # Options dumped with arv-tool
       #Enumeration: 'ExposureTimeSelector'
-        #EnumEntry: (0) 'Exp62_5Us'
-        #EnumEntry: (1) 'Exp250Us'
-        #EnumEntry: (2) 'Exp1000Us'
-    exposure_level: 2
+        #EnumEntry: (3) 'Exp350Us'
+        #EnumEntry: (4) 'Exp88Us'
+        #EnumEntry: (5) 'Exp13Us'
+    exposure_level: 3
+    
     # Options dumped with arv-tool
       #Enumeration: 'Scan3dOperatingMode'
-        #EnumEntry: (0) 'HighSpeedDistance2500mmSingleFreq'
-        #EnumEntry: (1) 'HighSpeedDistance1250mmSingleFreq'
-        #EnumEntry: (2) 'HighSpeedDistance625mmSingleFreq'
         #EnumEntry: (3) 'Distance8300mmMultiFreq'
         #EnumEntry: (4) 'Distance6000mmSingleFreq'
         #EnumEntry: (5) 'Distance5000mmMultiFreq'

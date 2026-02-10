@@ -8,7 +8,7 @@ endif()
 
 # Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -27,6 +27,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(PCL 1.10 REQUIRED COMPONENTS common io geometry search features)
+find_package(rcutils REQUIRED)
 
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
@@ -67,7 +68,16 @@ target_link_libraries(HALHelios
   -lavformat
   -lavutil
   -lswresample)
-ament_target_dependencies(HALHelios rclcpp rcutils std_msgs sensor_msgs geometry_msgs pcl_conversions)
+
+ament_target_dependencies(HALHelios
+  rclcpp
+  rclcpp_components
+  rcutils
+  std_msgs
+  sensor_msgs
+  geometry_msgs
+  pcl_conversions
+)
 
 rclcpp_components_register_node(
   HALHelios
