@@ -1,7 +1,6 @@
 #ifndef HAL_LUCIDLABS_HELIOS2
 #define HAL_LUCIDLABS_HELIOS2
 
-
 #include <string>
 #include <cstdlib>
 #include <vector>
@@ -16,46 +15,69 @@
 
 #include "ArenaApi.h"
 
-namespace hal {
+namespace hal
+{
 
-class LucidlabsHelios2 : public rclcpp::Node, public Arena::IImageCallback {
- private:
-   Arena::ISystem* pSystem = nullptr;
-   std::vector<Arena::DeviceInfo> deviceInfos;
-   Arena::IDevice* pDevice = nullptr;
-   GenApi::INodeMap* pNodeMap = nullptr;
-   GenApi::INodeMap* pStreamNodeMap = nullptr;
-   float offX, offY, offZ;
-   float scaleX, scaleY, scaleZ;
-   std::string output_topic;
-   int confidence_filter_threshold, flying_filter_threshold, accum, exposure, mode, hdr_mode;
-   bool confidence_filter, spatial_filter, flying_filter;
-   bool structured_cloud, publish_intensity;
-   std::string frame_id;
-   rclcpp::Clock::SharedPtr clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
+  class LucidlabsHelios2 : public rclcpp::Node, public Arena::IImageCallback
+  {
+  private:
+    Arena::ISystem *pSystem = nullptr;
+    std::vector<Arena::DeviceInfo> deviceInfos;
+    Arena::IDevice *pDevice = nullptr;
+    GenApi::INodeMap *pNodeMap = nullptr;
+    GenApi::INodeMap *pStreamNodeMap = nullptr;
+    float offX, offY, offZ;
+    float scaleX, scaleY, scaleZ;
+    int confidenceFilterThreshold, flyingFilterThreshold, accum, exposure, mode, hdrMode;
+    bool bConfidenceFilter, bSpatialFilter, bFlyingFilter;
+    bool bStructuredCloud, bPublishIntensity;
+    std::string frameID;
+    rclcpp::Clock::SharedPtr clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
+    
+    Arena::IDevice *findDevice();
+    
+    Arena::IImage *tryGetImage();
+    void runtime();
+    void OnImage(Arena::IImage *pImage) override;
+    
+    template <typename PointT>
+    void getPointCloudAndImage(Arena::IImage *pImage);
+    // void publishIntensityImage(Arena::IImage* pImage, const rclcpp::Time& stamp);
+    void initCameraInfo();
+    void publishCameraInfo(const rclcpp::Time& stamp);
+    bool nodeReadable(GenApi::INodeMap *nm, const char *name);
 
-   Arena::IDevice* findDevice();
+    int imgWidth_ = 640;
+    int imgHeight_ = 480;
 
-   Arena::IImage* try_get_image();
-   void runtime();
-   void OnImage(Arena::IImage* pImage) override;
+    std::string imgTopic;
+    std::string pointsTopic;
+    std::string camInfoTopic;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pcPublisher_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr imgPublisher_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camInfoPublisher_;
+    sensor_msgs::msg::CameraInfo camInfoMsg_;
+    bool camInfoReady_ = false;
 
-   template <typename PointT>
-   void get_point_cloud(Arena::IImage* pImage);
+    // For ABCY16: 4 uint16 per pixel
+    const int STRIDE = 4;
 
-   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pc_publisher_;
+    enum class cam_model
+    {
+      HELIOS_2,
+      HELIOS_2_PLUS,
+      HELIOS_2_RAY
+    };
+    cam_model m;
+    Arena::IImageCallback *pCallbackHandler;
 
-   enum class cam_model {HELIOS_2, HELIOS_2_PLUS, HELIOS_2_WIDE};
-   cam_model m;
-   Arena::IImageCallback* pCallbackHandler;
-   
- public:
-   LucidlabsHelios2(const rclcpp::NodeOptions & options);
+  public:
+    LucidlabsHelios2(const rclcpp::NodeOptions &options);
 
-   ~LucidlabsHelios2();
-};
+    ~LucidlabsHelios2();
+  };
 
-}  //namespace hal
+} // namespace hal
 
 #include "rclcpp_components/register_node_macro.hpp"
 
@@ -64,4 +86,4 @@ class LucidlabsHelios2 : public rclcpp::Node, public Arena::IImageCallback {
 // is being loaded into a running process.
 RCLCPP_COMPONENTS_REGISTER_NODE(hal::LucidlabsHelios2)
 
-#endif //HAL_LUCIDLABS_HELIOS2
+#endif // HAL_LUCIDLABS_HELIOS2

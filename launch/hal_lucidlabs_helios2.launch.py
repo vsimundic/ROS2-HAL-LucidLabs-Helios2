@@ -23,6 +23,6 @@ def generate_launch_description():
                     "stderr": "screen",
             },
             # parameters=[os.path.join(get_package_share_directory("hal_lucidlabs_helios2"), 'params', 'params.yaml')],
-            parameters=[os.path.join(get_package_share_directory("hal_lucidlabs_helios2"), 'params', 'helios2_wide_params.yaml')],
+            parameters=[os.path.join(get_package_share_directory("hal_lucidlabs_helios2"), 'params', 'helios2_ray_params.yaml')],
         )
 ])

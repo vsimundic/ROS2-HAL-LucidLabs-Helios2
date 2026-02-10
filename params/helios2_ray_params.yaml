@@ -15,7 +15,7 @@ hal_lucidlabs_helios2:
       #Enumeration: 'Scan3dHDRMode'
           #EnumEntry: (3) 'Off'
     hdr_mode: 3      
-    accumulate_frames: 1
+    accumulate_frames: 2
     frame_id: "camera"
     
     # Options dumped with arv-tool
