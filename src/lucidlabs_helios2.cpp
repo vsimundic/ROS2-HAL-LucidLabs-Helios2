@@ -254,7 +254,7 @@ namespace hal
         intensityImgTopic = "/" + frameID + "/intensity/image_raw";
         depthImgTopic = "/" + frameID + "/depth/image_raw";
         pointsTopic = "/" + frameID + "/points";
-        camInfoTopic = "/" + frameID + "/camera_info";
+        camInfoTopic = "/" + frameID + "/depth/camera_info";
 
         using namespace std::chrono_literals;
         // auto qos = rclcpp::SensorDataQoS().keep_last(1);
@@ -591,10 +591,8 @@ namespace hal
 
         const rclcpp::Time stamp = clock->now();
 
-        const int width = static_cast<int>(pImage->GetWidth());
-        const int height = static_cast<int>(pImage->GetHeight());
-        imgWidth_ = width;
-        imgHeight_ = height;
+        const int width = imgWidth_;
+        const int height = imgHeight_;
 
         const float qnan = std::numeric_limits<float>::quiet_NaN();
 
@@ -799,38 +797,45 @@ namespace hal
         camInfoMsg_.width = imgWidth_;
         camInfoMsg_.height = imgHeight_;
 
-        // Distortion: try to populate if CalibLensDistortionModel exists
         camInfoMsg_.distortion_model = "plumb_bob";
         camInfoMsg_.d = {0, 0, 0, 0, 0};
 
         try
         {
-            if (nodeReadable(pNodeMap, "CalibLensDistortionModel"))
+            if (nodeReadable(pNodeMap, "CalibLensDistortionValueSelector") &&
+                nodeReadable(pNodeMap, "CalibLensDistortionValue"))
             {
-                auto model = Arena::GetNodeValue<GenICam::gcstring>(pNodeMap, "CalibLensDistortionModel");
-                camInfoMsg_.distortion_model = model.c_str();
+                std::vector<double> d(5, 0.0);
 
-                // Optional: many setups expose 8 distortion values like the example.
-                // ROS CameraInfo typically uses 5 for plumb_bob, but we can store more.
-                if (nodeReadable(pNodeMap, "CalibLensDistortionValueSelector") &&
-                    nodeReadable(pNodeMap, "CalibLensDistortionValue"))
+                for (int i = 0; i < 5; ++i)
                 {
-                    std::vector<double> d;
-                    static const char *selectors[] = {
-                        "Value0", "Value1", "Value2", "Value3", "Value4", "Value5", "Value6", "Value7"};
+                    char selector_value[32];
+                    std::snprintf(selector_value, sizeof(selector_value), "Value%d", i);
 
-                    for (auto s : selectors)
-                    {
-                        Arena::SetNodeValue<GenICam::gcstring>(pNodeMap, "CalibLensDistortionValueSelector", s);
-                        d.push_back(Arena::GetNodeValue<double>(pNodeMap, "CalibLensDistortionValue"));
-                    }
-                    camInfoMsg_.d = d;
+                    Arena::SetNodeValue<GenICam::gcstring>(
+                        pNodeMap, "CalibLensDistortionValueSelector",
+                        GenICam::gcstring(selector_value));
+
+                    d[i] = Arena::GetNodeValue<double>(pNodeMap, "CalibLensDistortionValue");
                 }
+
+                // ROS plumb_bob expects: k1, k2, p1, p2, k3
+                camInfoMsg_.d = d;
+
+                RCLCPP_INFO(get_logger(),
+                            "Loaded distortion (plumb_bob): k1=%g k2=%g p1=%g p2=%g k3=%g",
+                            d[0], d[1], d[2], d[3], d[4]);
+            }
+            else
+            {
+                RCLCPP_WARN(get_logger(),
+                            "Distortion nodes not readable; publishing zero distortion.");
             }
         }
         catch (...)
         {
-            // keep default distortion if anything goes wrong
+            RCLCPP_WARN(get_logger(),
+                        "Exception reading distortion; publishing zero distortion.");
         }
 
         camInfoMsg_.k = {fx, 0, cx, 0, fy, cy, 0, 0, 1};
@@ -850,7 +855,12 @@ namespace hal
 
         camInfoMsg_.header.stamp = stamp;
         camInfoMsg_.header.frame_id = frameID;
-
+        // if (camInfoMsg_.width != static_cast<uint32_t>(imgWidth_) ||
+        //     camInfoMsg_.height != static_cast<uint32_t>(imgHeight_))
+        // {
+        //     camInfoMsg_.width = imgWidth_;
+        //     camInfoMsg_.height = imgHeight_;
+        // }
         camInfoPublisher_->publish(camInfoMsg_);
     }
 
