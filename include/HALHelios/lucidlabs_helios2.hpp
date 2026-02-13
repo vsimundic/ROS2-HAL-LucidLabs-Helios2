@@ -12,6 +12,9 @@
 #include "rclcpp/create_timer.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
+#include <opencv2/core.hpp>
 
 #include "ArenaApi.h"
 
@@ -28,39 +31,40 @@ namespace hal
     GenApi::INodeMap *pStreamNodeMap = nullptr;
     float offX, offY, offZ;
     float scaleX, scaleY, scaleZ;
+    float sX, sY, sZ, oX, oY, oZ;
     int confidenceFilterThreshold, flyingFilterThreshold, accum, exposure, mode, hdrMode;
     bool bConfidenceFilter, bSpatialFilter, bFlyingFilter;
-    bool bStructuredCloud, bPublishIntensity;
+    bool bStructuredCloud, bPublishIntensity, bPublishDepth;
+    bool hasY;
+
     std::string frameID;
     rclcpp::Clock::SharedPtr clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
-    
-    Arena::IDevice *findDevice();
-    
-    Arena::IImage *tryGetImage();
-    void runtime();
-    void OnImage(Arena::IImage *pImage) override;
-    
-    template <typename PointT>
-    void getPointCloudAndImage(Arena::IImage *pImage);
-    // void publishIntensityImage(Arena::IImage* pImage, const rclcpp::Time& stamp);
-    void initCameraInfo();
-    void publishCameraInfo(const rclcpp::Time& stamp);
-    bool nodeReadable(GenApi::INodeMap *nm, const char *name);
+    Arena::IImageCallback *pCallbackHandler;
 
     int imgWidth_ = 640;
     int imgHeight_ = 480;
+    const int n_distortion_coefficients = 5;
 
-    std::string imgTopic;
-    std::string pointsTopic;
-    std::string camInfoTopic;
+    std::string intensityImgTopic, depthImgTopic, pointsTopic, camInfoTopic;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pcPublisher_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr imgPublisher_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr intensityImgPublisher_, depthImgPublisher_;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camInfoPublisher_;
     sensor_msgs::msg::CameraInfo camInfoMsg_;
+    sensor_msgs::msg::Image intensityMsg_;
+    sensor_msgs::msg::Image depthMsg_;
+    sensor_msgs::msg::PointCloud2 cloudMsg_;
+    bool cloudInitialized_ = false;
+    bool cloudHasIntensity_ = false;
+    bool imagesInitialized_ = false;
     bool camInfoReady_ = false;
+    cv::Mat cameraMatrix, distortionCoeffs;
+    cv::Mat rvec;
+    cv::Mat tvec;
+
+
 
     // For ABCY16: 4 uint16 per pixel
-    const int STRIDE = 4;
+    int STRIDE = 4;
 
     enum class cam_model
     {
@@ -69,11 +73,22 @@ namespace hal
       HELIOS_2_RAY
     };
     cam_model m;
-    Arena::IImageCallback *pCallbackHandler;
 
+    Arena::IDevice *findDevice();
+    Arena::IImage *tryGetImage();
+    void runtime();
+    void OnImage(Arena::IImage *pImage) override;
+
+    template <typename PointT>
+    void getPointCloudAndImages(Arena::IImage *pImage);
+    // void publishIntensityImage(Arena::IImage* pImage, const rclcpp::Time& stamp);
+    void initCameraInfo();
+    void publishCameraInfo(const rclcpp::Time &stamp);
+    bool nodeReadable(GenApi::INodeMap *nm, const char *name);
+    void readCalibrationFromHelios(Arena::IDevice *pDeviceHLT);
+    cv::Mat projectAll3DPointsOnImage(const cv::Mat& xyz);
   public:
     LucidlabsHelios2(const rclcpp::NodeOptions &options);
-
     ~LucidlabsHelios2();
   };
 

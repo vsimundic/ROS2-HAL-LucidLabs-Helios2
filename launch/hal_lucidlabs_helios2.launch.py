@@ -1,28 +1,42 @@
 from launch import LaunchDescription
 from ament_index_python.packages import get_package_share_directory
-import launch_ros.actions
 import os
-import yaml
-from launch.substitutions import EnvironmentVariable
-import pathlib
-import launch.actions
 from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
-
-from launch.actions.execute_process import ExecuteProcess
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
+    debug = LaunchConfiguration('debug')
+    params = [os.path.join(
+        get_package_share_directory("helios2_hal"),
+        "params",
+        "helios2_ray_params.yaml"
+    )]
+
+    node_debug = Node(
+        package='helios2_hal',
+        executable='HALHeliosExecutable',
+        name='helios2_hal',
+        output='screen',
+        emulate_tty=True,
+        parameters=params,
+        prefix=['gdbserver --once localhost:3000'],
+        condition=IfCondition(debug),
+    )
+
+    node_normal = Node(
+        package='helios2_hal',
+        executable='HALHeliosExecutable',
+        name='helios2_hal',
+        output='screen',
+        emulate_tty=True,
+        parameters=params,
+        condition=UnlessCondition(debug),
+    )
+
     return LaunchDescription([
-        
-        Node(
-            package='hal_lucidlabs_helios2',
-            executable='HALHeliosExecutable',
-            name='hal_lucidlabs_helios2',
-            output={
-                    "stdout": "screen",
-                    "stderr": "screen",
-            },
-            # parameters=[os.path.join(get_package_share_directory("hal_lucidlabs_helios2"), 'params', 'params.yaml')],
-            parameters=[os.path.join(get_package_share_directory("hal_lucidlabs_helios2"), 'params', 'helios2_ray_params.yaml')],
-        )
-])
+        DeclareLaunchArgument('debug', default_value='false'),
+        node_debug,
+        node_normal,
+    ])

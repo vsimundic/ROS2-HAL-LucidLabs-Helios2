@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(hal_lucidlabs_helios2)
+project(helios2_hal)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -28,6 +28,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(PCL 1.10 REQUIRED COMPONENTS common io geometry search features)
 find_package(rcutils REQUIRED)
+find_package(OpenCV REQUIRED)
 
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
@@ -69,6 +70,14 @@ target_link_libraries(HALHelios
   -lavutil
   -lswresample)
 
+target_include_directories(HALHelios SYSTEM PRIVATE
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(HALHelios
+  ${OpenCV_LIBS}
+)
+
 ament_target_dependencies(HALHelios
   rclcpp
   rclcpp_components
@@ -77,6 +86,7 @@ ament_target_dependencies(HALHelios
   sensor_msgs
   geometry_msgs
   pcl_conversions
+  OpenCV
 )
 
 rclcpp_components_register_node(

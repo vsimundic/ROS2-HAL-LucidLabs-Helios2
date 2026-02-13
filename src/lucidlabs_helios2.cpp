@@ -8,6 +8,7 @@
 #include <cassert>
 #include <vector>
 #include <type_traits>
+#include <limits>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/clock.hpp"
@@ -21,6 +22,10 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/image_encodings.hpp"
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
+#include <opencv2/core.hpp>
+#include <opencv2/calib3d.hpp>
 
 #include "ArenaApi.h"
 
@@ -34,7 +39,7 @@ using std::placeholders::_1;
 namespace hal
 {
 
-    LucidlabsHelios2::LucidlabsHelios2(const rclcpp::NodeOptions &options) : Node("hal_lucidlabs_helios2", options)
+    LucidlabsHelios2::LucidlabsHelios2(const rclcpp::NodeOptions &options) : Node("helios2_hal", options)
     {
         // output_topic = declare_parameter<std::string>("output_topic", "/point_cloud");
         frameID = declare_parameter<std::string>("frame_id", "camera");
@@ -49,6 +54,7 @@ namespace hal
         flyingFilterThreshold = declare_parameter<int>("flying_filter.threshold", 0);
         bStructuredCloud = declare_parameter<bool>("structured_cloud", true);
         bPublishIntensity = declare_parameter<bool>("publish_intensity", true);
+        bPublishDepth = declare_parameter<bool>("publish_depth", true);
 
         pDevice = findDevice();
 
@@ -79,6 +85,9 @@ namespace hal
             GenApi::CEnumEntryPtr pFormat = pPixelMode->GetEntryByName(
                 bPublishIntensity ? "Coord3D_ABCY16" : "Coord3D_ABC16");
             pPixelMode->SetIntValue(pFormat->GetValue());
+
+            STRIDE = bPublishIntensity ? 4 : 3;
+            hasY = bPublishIntensity;
 
             /************************/
 
@@ -211,6 +220,13 @@ namespace hal
             offZ = pScan3DCoordinateOffset->GetValue();
             scaleZ = pScan3DCoordinateScale->GetValue();
 
+            sX = scaleX * 0.001f;
+            sY = scaleY * 0.001f;
+            sZ = scaleZ * 0.001f;
+            oX = offX * 0.001f;
+            oY = offY * 0.001f;
+            oZ = offZ * 0.001f;
+
             RCLCPP_INFO(get_logger(), "Offset = %f | %f | %f", offX, offY, offZ);
             RCLCPP_INFO(get_logger(), "Scale  = %f | %f | %f", scaleX, scaleY, scaleZ);
 
@@ -235,15 +251,22 @@ namespace hal
             std::abort();
         }
 
-        imgTopic = "/" + frameID + "/image_raw";
+        intensityImgTopic = "/" + frameID + "/intensity/image_raw";
+        depthImgTopic = "/" + frameID + "/depth/image_raw";
         pointsTopic = "/" + frameID + "/points";
         camInfoTopic = "/" + frameID + "/camera_info";
 
         using namespace std::chrono_literals;
+        // auto qos = rclcpp::SensorDataQoS().keep_last(1);
         pcPublisher_ = create_publisher<sensor_msgs::msg::PointCloud2>(pointsTopic, 1);
         if (bPublishIntensity)
-            imgPublisher_ = create_publisher<sensor_msgs::msg::Image>(imgTopic, 1);
+            intensityImgPublisher_ = create_publisher<sensor_msgs::msg::Image>(intensityImgTopic, 1);
+        if (bPublishDepth)
+            depthImgPublisher_ = create_publisher<sensor_msgs::msg::Image>(depthImgTopic, 1);
         camInfoPublisher_ = create_publisher<sensor_msgs::msg::CameraInfo>(camInfoTopic, 1);
+
+        rvec = cv::Mat::zeros(3, 1, CV_64F);
+        tvec = cv::Mat::zeros(3, 1, CV_64F);
 
         pDevice->StartStream();
 
@@ -320,20 +343,24 @@ namespace hal
     void LucidlabsHelios2::runtime()
     {
         auto img = tryGetImage();
-        // Get timestamp
-        auto stamp = clock->now();
-        // if (bPublishIntensity)
-        //     publishIntensityImage(img, stamp);
-        getPointCloudAndImage<pcl::PointXYZ>(img);
-        pDevice->RequeueBuffer(img);
+        if (img != nullptr)
+        {
+            getPointCloudAndImages<pcl::PointXYZ>(img);
+            // pDevice->RequeueBuffer(img);
+        }
     }
 
     void LucidlabsHelios2::OnImage(Arena::IImage *img)
     {
-        auto stamp = clock->now();
-        // if (bPublishIntensity)
-        //     publishIntensityImage(img, stamp);
-        getPointCloudAndImage<pcl::PointXYZI>(img);
+        if (!img)
+            return;
+
+        if (bPublishIntensity)
+            getPointCloudAndImages<pcl::PointXYZI>(img);
+        else
+            getPointCloudAndImages<pcl::PointXYZ>(img);
+
+        // pDevice->RequeueBuffer(img);
     }
 
     LucidlabsHelios2::~LucidlabsHelios2()
@@ -358,7 +385,7 @@ namespace hal
             if (img->IsIncomplete())
             {
                 RCLCPP_WARN(get_logger(), "Incomplete frame");
-                pDevice->RequeueBuffer(img);
+                // pDevice->RequeueBuffer(img);
                 return nullptr;
             }
             return img;
@@ -369,181 +396,335 @@ namespace hal
         }
     }
 
-    // // TODO split ROS publishing to ensure a short image callback
-    // // maybe using ROS timers to put an event in ROS queue after copying the buffer is sufficient
     // template <typename PointT>
-    // void LucidlabsHelios2::getPointCloudAndImage(Arena::IImage *pImage, const rclcpp::Time &stamp)
+    // void LucidlabsHelios2::getPointCloudAndImages(Arena::IImage *pImage)
     // {
-    //     if (pImage == nullptr)
+    //     if (!pImage || pImage->IsIncomplete())
     //         return;
-    //     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+    //     rclcpp::Time stamp = clock->now();
+
+    //     const int width = static_cast<int>(pImage->GetWidth());
+    //     const int height = static_cast<int>(pImage->GetHeight());
+    //     imgWidth_ = width;
+    //     imgHeight_ = height;
+
+    //     // // Determine if the buffer actually contains Y (ABCY16 vs ABC16)
+    //     // const int64_t pf = pImage->GetPixelFormat();
+    //     // const bool hasY = (pf == Coord3D_ABCY16) || (pf == Coord3D_ABCY16s);
+    //     // STRIDE = hasY ? 4 : 3;
+
+    //     // ---- Intensity image (mono16) ----
+    //     uint16_t *intensityDst = nullptr;
+    //     const bool publish_intensity_now = (bPublishIntensity && intensityImgPublisher_ && hasY);
+    //     if (publish_intensity_now)
+    //     {
+    //         intensityMsg_.header.stamp = stamp;
+    //         intensityMsg_.header.frame_id = frameID;
+    //         const bool size_changed =
+    //             (!imagesInitialized_) ||
+    //             (static_cast<int>(intensityMsg_.width) != width) ||
+    //             (static_cast<int>(intensityMsg_.height) != height);
+    //         if (size_changed)
+    //         {
+    //             intensityMsg_.width = width;
+    //             intensityMsg_.height = height;
+    //             intensityMsg_.encoding = sensor_msgs::image_encodings::MONO16;
+    //             intensityMsg_.is_bigendian = false;
+    //             intensityMsg_.step = width * sizeof(uint16_t);
+    //             intensityMsg_.data.resize(static_cast<size_t>(intensityMsg_.step) * intensityMsg_.height);
+    //         }
+    //         intensityDst = reinterpret_cast<uint16_t *>(intensityMsg_.data.data());
+    //     }
+
+    //     // ---- Depth image (32FC1) ----
+    //     float *depthDst = nullptr;
+    //     const bool publish_depth_now = (bPublishDepth && depthImgPublisher_);
+    //     if (publish_depth_now)
+    //     {
+    //         depthMsg_.header.stamp = stamp;
+    //         depthMsg_.header.frame_id = frameID;
+    //         const bool size_changed =
+    //             (!imagesInitialized_) ||
+    //             (static_cast<int>(depthMsg_.width) != width) ||
+    //             (static_cast<int>(depthMsg_.height) != height);
+    //         if (size_changed)
+    //         {
+    //             depthMsg_.width = width;
+    //             depthMsg_.height = height;
+    //             depthMsg_.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
+    //             depthMsg_.is_bigendian = false;
+    //             depthMsg_.step = width * sizeof(float);
+    //             depthMsg_.data.resize(static_cast<size_t>(depthMsg_.step) * depthMsg_.height);
+    //         }
+    //         depthDst = reinterpret_cast<float *>(depthMsg_.data.data());
+    //     }
+    //     imagesInitialized_ = true;
+
+    //     // ---- Point cloud ----
     //     pcl::PointCloud<PointT> cloud_;
-    //     sensor_msgs::msg::PointCloud2 cloud_msg;
-    //     cloud_.reserve(imgWidth_ * imgHeight_);
-
-    //     const uint16_t *data = (uint16_t *)(pImage->GetData());
-    //     uint16_t A, B, C, Y;
-    //     (void)Y;
-
+    //     cloud_.reserve(static_cast<size_t>(width) * height);
     //     if (bStructuredCloud)
     //     {
-    //         cloud_.resize(imgWidth_ * imgHeight_);
-    //         cloud_.width = imgWidth_;
-    //         cloud_.height = imgHeight_;
+    //         cloud_.resize(static_cast<size_t>(width) * height);
+    //         cloud_.width = width;
+    //         cloud_.height = height;
     //     }
 
-    //     PointT *p = nullptr;
-    //     bool last_invalid = false;
-    //     for (int o = 0; o < imgWidth_ * imgHeight_; o++)
+    //     const uint16_t *data = reinterpret_cast<const uint16_t *>(pImage->GetData());
+    //     const int N = width * height;
+    //     // PointT *p = nullptr;
+    //     // bool lastInvalid = false;
+    //     const float qnan = std::numeric_limits<float>::quiet_NaN();
+
+    //     for (int o = 0; o < N; ++o)
     //     {
-    //         if constexpr (std::is_same<PointT, pcl::PointXYZ>::value)
-    //         {
-    //             A = data[o * 3 + 0];
-    //             B = data[o * 3 + 1];
-    //             C = data[o * 3 + 2];
-    //         }
-    //         else
-    //         {
-    //             A = data[o * 4 + 0];
-    //             B = data[o * 4 + 1];
-    //             C = data[o * 4 + 2];
-    //             Y = data[o * 4 + 3];
-    //         }
+    //         const uint16_t A = data[o * STRIDE + 0];
+    //         const uint16_t B = data[o * STRIDE + 1];
+    //         const uint16_t C = data[o * STRIDE + 2];
+    //         const uint16_t Y = hasY ? data[o * 4 + 3] : 0;
+
+    //         const bool valid = (A != 0xFFFF && B != 0xFFFF && C != 0xFFFF);
+
+    //         // Intensity
+    //         if (publish_intensity_now)
+    //             intensityDst[o] = valid ? Y : 0;
+
+    //         // Depth (Z in meters)
+    //         if (publish_depth_now)
+    //             depthDst[o] = valid ? (C * sZ + oZ) : qnan;
+
+    //         // Point Cloud
+    //         // if (bStructuredCloud)
+    //         // {
+    //         //     p = &cloud_[o];
+    //         // }
+    //         // else if (!lastInvalid)
+    //         // {
+    //         //     cloud_.emplace_back();
+    //         //     p = &cloud_.back();
+    //         // }
+
+    //         // if (A != 0xFFFF && B != 0xFFFF && C != 0xFFFF)
+    //         // {
+    //         //     p->x = (A * scaleX + offX) / 1000.0f;
+    //         //     p->y = (B * scaleY + offY) / 1000.0f;
+    //         //     p->z = (C * scaleZ + offZ) / 1000.0f;
+
+    //         //     if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+    //         //         p->intensity = static_cast<float>(Y);
+
+    //         //     lastInvalid = false;
+    //         // }
+    //         // else
+    //         // {
+    //         //     p->x = p->y = p->z = 0.0f;
+    //         //     if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+    //         //         p->intensity = 0.0f;
+    //         //     lastInvalid = true;
+    //         // }
     //         if (bStructuredCloud)
     //         {
-    //             p = &cloud_[o];
-    //         }
-    //         else if (!last_invalid)
-    //         {
-    //             cloud_.emplace_back();
-    //             p = &cloud_.back();
-    //         }
+    //             PointT &pt = cloud_[o];
+    //             if (valid)
+    //             {
+    //                 pt.x = A * sX + oX;
+    //                 pt.y = B * sY + oY;
+    //                 pt.z = C * sZ + oZ;
 
-    //         if (A != 0xFFFF && B != 0xFFFF && C != 0xFFFF)
-    //         {
-    //             assert(p != nullptr);
-    //             p->x = (A * scaleX + offX) / 1000;
-    //             p->y = (B * scaleY + offY) / 1000;
-    //             p->z = (C * scaleZ + offZ) / 1000;
-    //             if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
-    //                 p->intensity = (float)Y;
-    //             last_invalid = false;
+    //                 if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+    //                     pt.intensity = hasY ? static_cast<float>(Y) : 0.0f;
+    //             }
+    //             else
+    //             {
+    //                 pt.x = pt.y = pt.z = 0.0f;
+    //                 if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+    //                     pt.intensity = 0.0f;
+    //             }
     //         }
     //         else
     //         {
-    //             assert(p != nullptr);
-    //             p->x = 0;
-    //             p->y = 0;
-    //             p->z = 0;
-    //             if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
-    //                 p->intensity = 0;
-    //             last_invalid = true;
+    //             if (valid)
+    //             {
+    //                 PointT pt;
+    //                 pt.x = A * sX + oX;
+    //                 pt.y = B * sY + oY;
+    //                 pt.z = C * sZ + oZ;
+    //                 if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+    //                     pt.intensity = hasY ? static_cast<float>(Y) : 0.0f;
+    //                 cloud_.push_back(pt);
+    //             }
     //         }
     //     }
-    //     if (!bStructuredCloud && last_invalid)
+
+    //     if (!bStructuredCloud)
     //     {
-    //         cloud_.resize(cloud_.size() - 1);
+    //         cloud_.width = static_cast<uint32_t>(cloud_.size());
+    //         cloud_.height = 1;
     //     }
 
-    //     pcl::toROSMsg(cloud_, cloud_msg);
-    //     cloud_msg.header.stamp = stamp;
-    //     cloud_msg.header.frame_id = frameID;
-    //     cloud_msg.is_dense = false;
+    //     // if (!bStructuredCloud && lastInvalid && !cloud_.empty())
+    //     //     cloud_.resize(cloud_.size() - 1);
 
-    //     pcPublisher_->publish(cloud_msg);
-    //     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    //     RCLCPP_INFO(get_logger(), "Time difference = %d [ms]", std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count());
+    //     sensor_msgs::msg::PointCloud2 cloudMsg;
+    //     pcl::toROSMsg(cloud_, cloudMsg);
+    //     cloudMsg.header.stamp = stamp;
+    //     cloudMsg.header.frame_id = frameID;
+    //     cloudMsg.is_dense = false;
+
+    //     pcPublisher_->publish(cloudMsg);
+
+    //     if (publish_intensity_now)
+    //         intensityImgPublisher_->publish(intensityMsg_);
+
+    //     if (publish_depth_now)
+    //         depthImgPublisher_->publish(depthMsg_);
+
+    //     publishCameraInfo(stamp);
     // }
 
     template <typename PointT>
-    void LucidlabsHelios2::getPointCloudAndImage(Arena::IImage *pImage)
+    void LucidlabsHelios2::getPointCloudAndImages(Arena::IImage *pImage)
     {
         if (!pImage || pImage->IsIncomplete())
             return;
 
-        rclcpp::Time stamp = clock->now();
+        const rclcpp::Time stamp = clock->now();
 
         const int width = static_cast<int>(pImage->GetWidth());
         const int height = static_cast<int>(pImage->GetHeight());
-
         imgWidth_ = width;
         imgHeight_ = height;
 
-        sensor_msgs::msg::Image imgMsg;
-        uint16_t *imgDst = nullptr;
+        const float qnan = std::numeric_limits<float>::quiet_NaN();
 
-        if (bPublishIntensity)
+        // ---------- Intensity (MONO16) ----------
+        uint16_t *intensityDst = nullptr;
+        const bool publish_intensity_now = (bPublishIntensity && intensityImgPublisher_ && hasY);
+
+        if (publish_intensity_now)
         {
-            imgMsg.header.stamp = stamp;
-            imgMsg.header.frame_id = frameID;
-            imgMsg.width = width;
-            imgMsg.height = height;
-            imgMsg.encoding = sensor_msgs::image_encodings::MONO16;
-            imgMsg.is_bigendian = false;
-            imgMsg.step = width * sizeof(uint16_t);
-            imgMsg.data.resize(static_cast<size_t>(imgMsg.step) * imgMsg.height);
-            imgDst = reinterpret_cast<uint16_t *>(imgMsg.data.data());
+            intensityMsg_.header.stamp = stamp;
+            intensityMsg_.header.frame_id = frameID;
+
+            const bool size_changed =
+                (!imagesInitialized_) ||
+                (static_cast<int>(intensityMsg_.width) != width) ||
+                (static_cast<int>(intensityMsg_.height) != height);
+
+            if (size_changed)
+            {
+                intensityMsg_.width = width;
+                intensityMsg_.height = height;
+                intensityMsg_.encoding = sensor_msgs::image_encodings::MONO16;
+                intensityMsg_.is_bigendian = false;
+                intensityMsg_.step = width * sizeof(uint16_t);
+                intensityMsg_.data.resize(static_cast<size_t>(intensityMsg_.step) * intensityMsg_.height);
+            }
+
+            intensityDst = reinterpret_cast<uint16_t *>(intensityMsg_.data.data());
         }
 
-        pcl::PointCloud<PointT> cloud_;
-        cloud_.reserve(static_cast<size_t>(width) * height);
+        // ---------- Depth (32FC1) ----------
+        float *depthDst = nullptr;
+        const bool publish_depth_now = (bPublishDepth && depthImgPublisher_);
 
+        if (publish_depth_now)
+        {
+            depthMsg_.header.stamp = stamp;
+            depthMsg_.header.frame_id = frameID;
+
+            const bool size_changed =
+                (!imagesInitialized_) ||
+                (static_cast<int>(depthMsg_.width) != width) ||
+                (static_cast<int>(depthMsg_.height) != height);
+
+            if (size_changed)
+            {
+                depthMsg_.width = width;
+                depthMsg_.height = height;
+                depthMsg_.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
+                depthMsg_.is_bigendian = false;
+                depthMsg_.step = width * sizeof(float);
+                depthMsg_.data.resize(static_cast<size_t>(depthMsg_.step) * depthMsg_.height);
+            }
+
+            depthDst = reinterpret_cast<float *>(depthMsg_.data.data());
+        }
+
+        imagesInitialized_ = true;
+
+        // ---------- Point Cloud ----------
+        pcl::PointCloud<PointT> cloud_;
         if (bStructuredCloud)
         {
             cloud_.resize(static_cast<size_t>(width) * height);
             cloud_.width = width;
             cloud_.height = height;
         }
+        else
+        {
+            cloud_.reserve(static_cast<size_t>(width) * height);
+        }
 
         const uint16_t *data = reinterpret_cast<const uint16_t *>(pImage->GetData());
-
-
-        PointT *p = nullptr;
-        bool lastInvalid = false;
-
         const int N = width * height;
+
         for (int o = 0; o < N; ++o)
         {
             const uint16_t A = data[o * STRIDE + 0];
             const uint16_t B = data[o * STRIDE + 1];
             const uint16_t C = data[o * STRIDE + 2];
-            const uint16_t Y = data[o * STRIDE + 3];
+            const uint16_t Y = hasY ? data[o * STRIDE + 3] : 0;
 
-            if (bPublishIntensity)
-                imgDst[o] = Y;
+            const bool valid = (A != 0xFFFF && B != 0xFFFF && C != 0xFFFF);
+
+            if (publish_intensity_now)
+                intensityDst[o] = valid ? Y : 0;
+
+            if (publish_depth_now)
+                depthDst[o] = valid ? (C * sZ + oZ) : qnan;
 
             if (bStructuredCloud)
             {
-                p = &cloud_[o];
-            }
-            else if (!lastInvalid)
-            {
-                cloud_.emplace_back();
-                p = &cloud_.back();
-            }
+                PointT &pt = cloud_[o];
+                if (valid)
+                {
+                    pt.x = A * sX + oX;
+                    pt.y = B * sY + oY;
+                    pt.z = C * sZ + oZ;
 
-            if (A != 0xFFFF && B != 0xFFFF && C != 0xFFFF)
-            {
-                p->x = (A * scaleX + offX) / 1000.0f;
-                p->y = (B * scaleY + offY) / 1000.0f;
-                p->z = (C * scaleZ + offZ) / 1000.0f;
-
-                if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
-                    p->intensity = static_cast<float>(Y);
-
-                lastInvalid = false;
+                    if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+                        pt.intensity = hasY ? static_cast<float>(Y) : 0.0f;
+                }
+                else
+                {
+                    // better than (0,0,0) because 0 becomes a "real" point at the origin
+                    pt.x = pt.y = pt.z = qnan;
+                    if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+                        pt.intensity = 0.0f;
+                }
             }
             else
             {
-                p->x = p->y = p->z = 0.0f;
-                if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
-                    p->intensity = 0.0f;
-                lastInvalid = true;
+                if (valid)
+                {
+                    PointT pt;
+                    pt.x = A * sX + oX;
+                    pt.y = B * sY + oY;
+                    pt.z = C * sZ + oZ;
+                    if constexpr (std::is_same<PointT, pcl::PointXYZI>::value)
+                        pt.intensity = hasY ? static_cast<float>(Y) : 0.0f;
+                    cloud_.push_back(pt);
+                }
             }
         }
 
-        if (!bStructuredCloud && lastInvalid && !cloud_.empty())
-            cloud_.resize(cloud_.size() - 1);
+        if (!bStructuredCloud)
+        {
+            cloud_.width = static_cast<uint32_t>(cloud_.size());
+            cloud_.height = 1;
+        }
 
         sensor_msgs::msg::PointCloud2 cloudMsg;
         pcl::toROSMsg(cloud_, cloudMsg);
@@ -553,46 +734,14 @@ namespace hal
 
         pcPublisher_->publish(cloudMsg);
 
-        if (bPublishIntensity)
-            imgPublisher_->publish(imgMsg);
+        if (publish_intensity_now)
+            intensityImgPublisher_->publish(intensityMsg_);
+
+        if (publish_depth_now)
+            depthImgPublisher_->publish(depthMsg_);
 
         publishCameraInfo(stamp);
     }
-
-    // void LucidlabsHelios2::publishIntensityImage(Arena::IImage *pImage, const rclcpp::Time &stamp)
-    // {
-    //     if (!imgPublisher_)
-    //         return;
-    //     if (!pImage || pImage->IsIncomplete())
-    //         return;
-
-    //     const size_t width = pImage->GetWidth();
-    //     const size_t height = pImage->GetHeight();
-    //     const size_t count = width * height;
-
-    //     sensor_msgs::msg::Image img_msg;
-
-    //     img_msg.header.stamp = stamp;
-    //     img_msg.header.frame_id = frameID; // or your frame
-    //     img_msg.width = width;
-    //     img_msg.height = height;
-    //     img_msg.encoding = sensor_msgs::image_encodings::MONO16;
-    //     img_msg.is_bigendian = false;
-    //     img_msg.step = width * sizeof(uint16_t);
-    //     img_msg.data.resize(img_msg.step * img_msg.height);
-
-    //     const uint8_t *raw = pImage->GetData();
-    //     const uint16_t *src = reinterpret_cast<const uint16_t *>(raw);
-    //     uint16_t *dst = reinterpret_cast<uint16_t *>(img_msg.data.data());
-
-    //     // ABCY16 → take Y
-    //     for (size_t i = 0; i < count; ++i)
-    //     {
-    //         dst[i] = src[i * 4 + 3];
-    //     }
-
-    //     imgPublisher_->publish(img_msg);
-    // }
 
     void LucidlabsHelios2::initCameraInfo()
     {
@@ -711,6 +860,87 @@ namespace hal
             return false;
         GenApi::INode *n = nm->GetNode(name);
         return n && GenApi::IsReadable(n);
+    }
+
+    void LucidlabsHelios2::readCalibrationFromHelios(Arena::IDevice *pDeviceHLT)
+    {
+        GenApi::INodeMap *nodeMap = pDeviceHLT->GetNodeMap();
+        cameraMatrix = cv::Mat::zeros(3, 3, CV_64FC1);
+        RCLCPP_INFO(get_logger(), "Reading intrinsics from nodes: CalibFocalLengthX, CalibFocalLengthY, CalibOpticalCenterX, CalibOpticalCenterY");
+        cameraMatrix.at<double>(0, 0) = Arena::GetNodeValue<double>(nodeMap, "CalibFocalLengthX");
+        cameraMatrix.at<double>(1, 1) = Arena::GetNodeValue<double>(nodeMap, "CalibFocalLengthY");
+        cameraMatrix.at<double>(0, 2) = Arena::GetNodeValue<double>(nodeMap, "CalibOpticalCenterX");
+        cameraMatrix.at<double>(1, 2) = Arena::GetNodeValue<double>(nodeMap, "CalibOpticalCenterY");
+        cameraMatrix.at<double>(2, 2) = 1;
+        RCLCPP_INFO(get_logger(), "Focal length is %0.5f pixels\n", cameraMatrix.at<double>(0, 0));
+        RCLCPP_INFO(get_logger(), "Optical center is (%0.3f, %0.3f) pixels\n", cameraMatrix.at<double>(0, 2), cameraMatrix.at<double>(1, 2));
+        const int n_distortion_coefficients = 5; // 5 for HLT/HTP, 8 for HTW
+        distortionCoeffs = cv::Mat::zeros(1, n_distortion_coefficients, CV_64FC1);
+        RCLCPP_INFO(get_logger(), "Reading %d distortion values from camera\n", n_distortion_coefficients);
+
+        for (int i = 0; i < n_distortion_coefficients; ++i)
+        {
+            char selector_value[32];
+            std::snprintf(selector_value, sizeof(selector_value), "Value%d", i);
+
+            Arena::SetNodeValue<GenICam::gcstring>(
+                nodeMap, "CalibLensDistortionValueSelector",
+                GenICam::gcstring(selector_value));
+
+            distortionCoeffs.at<double>(0, i) =
+                Arena::GetNodeValue<double>(nodeMap, "CalibLensDistortionValue");
+        }
+    }
+
+    cv::Mat LucidlabsHelios2::projectAll3DPointsOnImage(const cv::Mat &xyz_mm)
+    {
+        CV_Assert(xyz_mm.type() == CV_32FC3);
+        const int H = xyz_mm.rows;
+        const int W = xyz_mm.cols;
+
+        const float qnan = std::numeric_limits<float>::quiet_NaN();
+        cv::Mat uv(H, W, CV_32FC2, cv::Scalar(qnan, qnan));
+
+        std::vector<cv::Point3f> obj;
+        std::vector<int> linear_idx;
+        obj.reserve(static_cast<size_t>(H) * W);
+        linear_idx.reserve(static_cast<size_t>(H) * W);
+
+        for (int r = 0; r < H; ++r)
+        {
+            const cv::Vec3f *row = xyz_mm.ptr<cv::Vec3f>(r);
+            for (int c = 0; c < W; ++c)
+            {
+                const float X = row[c][0];
+                const float Y = row[c][1];
+                const float Z = row[c][2];
+
+                // Only project valid points in front of the camera
+                if (std::isfinite(X) && std::isfinite(Y) && std::isfinite(Z) && Z > 1e-6f)
+                {
+                    obj.emplace_back(X, Y, Z);
+                    linear_idx.push_back(r * W + c);
+                }
+            }
+        }
+
+        if (obj.empty())
+            return uv;
+
+        std::vector<cv::Point2f> img;
+        img.reserve(obj.size());
+
+        cv::projectPoints(obj, rvec, tvec, cameraMatrix, distortionCoeffs, img);
+
+        for (size_t i = 0; i < img.size(); ++i)
+        {
+            const int k = linear_idx[i];
+            const int r = k / W;
+            const int c = k % W;
+            uv.at<cv::Vec2f>(r, c) = cv::Vec2f(img[i].x, img[i].y); // (u,v) = (col,row)
+        }
+
+        return uv;
     }
 
 } // namespace hal

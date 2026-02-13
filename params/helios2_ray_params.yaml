@@ -1,8 +1,9 @@
-hal_lucidlabs_helios2:
+helios2_hal:
   ros__parameters:
     output_topic: "/point_cloud"
     structured_cloud: true
     publish_intensity: true
+    publish_depth: true
     confidence_filter:
       enable: True
       threshold: 500
