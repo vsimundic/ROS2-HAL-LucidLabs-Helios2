@@ -6,7 +6,7 @@ helios2_hal:
     publish_depth: true
     confidence_filter:
       enable: True
-      threshold: 500
+      threshold: 1000
     spatial_filter:
       enable: true
     flying_filter: 
@@ -16,7 +16,7 @@ helios2_hal:
       #Enumeration: 'Scan3dHDRMode'
           #EnumEntry: (3) 'Off'
     hdr_mode: 3      
-    accumulate_frames: 2
+    accumulate_frames: 1
     frame_id: "camera"
     
     # Options dumped with arv-tool
@@ -24,7 +24,7 @@ helios2_hal:
         #EnumEntry: (3) 'Exp350Us'
         #EnumEntry: (4) 'Exp88Us'
         #EnumEntry: (5) 'Exp13Us'
-    exposure_level: 3
+    exposure_level: 4
     
     # Options dumped with arv-tool
       #Enumeration: 'Scan3dOperatingMode'
