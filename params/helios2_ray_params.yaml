@@ -24,7 +24,7 @@ helios2_hal:
         #EnumEntry: (3) 'Exp350Us'
         #EnumEntry: (4) 'Exp88Us'
         #EnumEntry: (5) 'Exp13Us'
-    exposure_level: 4
+    exposure_level: 3
     
     # Options dumped with arv-tool
       #Enumeration: 'Scan3dOperatingMode'
@@ -34,4 +34,4 @@ helios2_hal:
         #EnumEntry: (6) 'Distance4000mmSingleFreq'
         #EnumEntry: (7) 'Distance3000mmSingleFreq'
         #EnumEntry: (8) 'Distance1250mmSingleFreq'
-    mode: 5
+    mode: 3

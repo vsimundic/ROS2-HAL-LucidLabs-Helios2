@@ -4,6 +4,13 @@
 #include <string>
 #include <cstdlib>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include "HALHelios/rgb_projection.hpp"
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/clock.hpp"
@@ -29,6 +36,26 @@ namespace hal
     Arena::IDevice *pDevice = nullptr;
     GenApi::INodeMap *pNodeMap = nullptr;
     GenApi::INodeMap *pStreamNodeMap = nullptr;
+    Arena::IDevice *rgbDevice_ = nullptr;
+    bool rgbEnabled_ = false;
+    bool rgbStreaming_ = false;
+    double rgbMaxAgeMs_ = 200.0;
+    int rgbOutputWidth_ = 0;
+    int rgbOutputHeight_ = 0;
+    std::atomic<bool> rgbRunning_{false};
+    std::thread rgbThread_;
+    std::mutex rgbMutex_;
+    cv::Mat latestRgb_;
+    std::chrono::steady_clock::time_point latestRgbTime_;
+    RgbProjection rgbProjection_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rgbPublisher_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr rgbCameraInfoPublisher_;
+    sensor_msgs::msg::CameraInfo rgbCameraInfoMsg_;
+    std::string rgbFrameId_;
+    void initRgb();
+    void captureRgb();
+    void stopRgb() noexcept;
+    void addRgb(sensor_msgs::msg::PointCloud2 &cloud);
     float offX, offY, offZ;
     float scaleX, scaleY, scaleZ;
     float sX, sY, sZ, oX, oY, oZ;
@@ -93,12 +120,5 @@ namespace hal
   };
 
 } // namespace hal
-
-#include "rclcpp_components/register_node_macro.hpp"
-
-// Register the component with class_loader.
-// This acts as a sort of entry point, allowing the component to be discoverable when its library
-// is being loaded into a running process.
-RCLCPP_COMPONENTS_REGISTER_NODE(hal::LucidlabsHelios2)
 
 #endif // HAL_LUCIDLABS_HELIOS2

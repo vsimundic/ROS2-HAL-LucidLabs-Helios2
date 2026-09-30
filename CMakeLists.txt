@@ -53,7 +53,7 @@ link_directories(
   $ENV{ARENA_PATH}/GenICam/library/lib/Linux64_x64
 )
 
-add_library(HALHelios SHARED src/lucidlabs_helios2.cpp)
+add_library(HALHelios SHARED src/lucidlabs_helios2.cpp src/triton_rgb.cpp)
 target_link_libraries(HALHelios 
   -larena
   -lsave
@@ -109,5 +109,13 @@ install(DIRECTORY
   params
   DESTINATION share/${PROJECT_NAME}/
 )
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(rgb_projection_test test/rgb_projection_test.cpp)
+  target_include_directories(rgb_projection_test PRIVATE include ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(rgb_projection_test ${OpenCV_LIBS})
+  add_test(NAME rgb_projection_test COMMAND rgb_projection_test)
+endif()
 
 ament_package()

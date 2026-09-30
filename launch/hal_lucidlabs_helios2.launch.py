@@ -11,7 +11,7 @@ def generate_launch_description():
     params = [os.path.join(
         get_package_share_directory("helios2_hal"),
         "params",
-        "helios2_ray_params.yaml"
+        "params.yaml"
     )]
 
     node_debug = Node(
